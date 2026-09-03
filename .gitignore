@@ -1,0 +1,9 @@
+node_modules/
+.env
+tmp/
+data/*.db
+data/*.db-*
+storage/certificates/*.pdf
+storage/imports/*
+!storage/certificates/.gitkeep
+!storage/imports/.gitkeep

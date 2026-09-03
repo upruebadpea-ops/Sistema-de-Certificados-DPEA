@@ -1,0 +1,26 @@
+{
+  "name": "sistema-certificados-dpea",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Emisión, almacenamiento y validación pública de certificados DPEA",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "node --watch app.js",
+    "check": "node --check app.js"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "better-sqlite3": "^12.2.0",
+    "bcryptjs": "^3.0.2",
+    "csv-parse": "^6.1.0",
+    "dotenv": "^17.2.2",
+    "ejs": "^3.1.10",
+    "express": "^5.1.0",
+    "express-session": "^1.18.2",
+    "helmet": "^8.1.0",
+    "multer": "^2.0.2",
+    "pdf-lib": "^1.17.1",
+    "qrcode": "^1.5.4"
+  }
+}
