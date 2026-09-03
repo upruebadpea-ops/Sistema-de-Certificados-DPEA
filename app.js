@@ -1,244 +1,37 @@
 require('dotenv').config();
-const path = require('path');
-const fs = require('fs');
-const crypto = require('crypto');
-const express = require('express');
-const session = require('express-session');
-const helmet = require('helmet');
-const multer = require('multer');
-const bcrypt = require('bcryptjs');
-const QRCode = require('qrcode');
-const { parse } = require('csv-parse/sync');
-const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
-const Database = require('better-sqlite3');
-
-const ROOT = __dirname;
-const DATA_DIR = path.join(ROOT, 'data');
-const CERT_DIR = path.join(ROOT, 'storage', 'certificates');
-const IMPORT_DIR = path.join(ROOT, 'storage', 'imports');
-[DATA_DIR, CERT_DIR, IMPORT_DIR].forEach(dir => fs.mkdirSync(dir, { recursive: true }));
-
-const app = express();
-const db = new Database(path.join(DATA_DIR, 'certificados.db'));
-db.pragma('journal_mode = WAL');
-db.exec(`
-  CREATE TABLE IF NOT EXISTS certificates (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    code TEXT NOT NULL UNIQUE,
-    full_name TEXT NOT NULL,
-    document_id TEXT DEFAULT '',
-    event_name TEXT NOT NULL,
-    hours TEXT DEFAULT '',
-    issue_date TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'VALIDO' CHECK(status IN ('VALIDO','ANULADO')),
-    pdf_filename TEXT,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-  );
-  CREATE INDEX IF NOT EXISTS idx_certificates_name ON certificates(full_name);
-  CREATE INDEX IF NOT EXISTS idx_certificates_code ON certificates(code);
-`);
-
-const upload = multer({
-  dest: IMPORT_DIR,
-  limits: { fileSize: 5 * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => cb(null, /\.(csv)$/i.test(file.originalname))
-});
-
-app.set('view engine', 'ejs');
-app.set('views', path.join(ROOT, 'views'));
-app.use(helmet({ contentSecurityPolicy: false }));
-app.use(express.urlencoded({ extended: false, limit: '1mb' }));
-app.use(express.json({ limit: '1mb' }));
-app.use(express.static(path.join(ROOT, 'public')));
-app.use('/certificados', express.static(CERT_DIR, { fallthrough: false }));
-app.use(session({
-  secret: process.env.SESSION_SECRET || 'solo-desarrollo-cambiar',
-  resave: false,
-  saveUninitialized: false,
-  cookie: { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 8 * 60 * 60 * 1000 }
-}));
-
-app.use((req, res, next) => {
-  res.locals.institution = process.env.INSTITUTION_NAME || 'División de Planificación y Evaluación Académica';
-  res.locals.officialUrl = process.env.OFFICIAL_URL || 'https://planificacionacademica.usfx.bo/';
-  res.locals.baseUrl = (process.env.BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
-  res.locals.user = req.session.user || null;
-  res.locals.message = req.session.message || null;
-  delete req.session.message;
-  next();
-});
-
-function requireAuth(req, res, next) {
-  if (!req.session.user) return res.redirect('/admin/login');
-  next();
-}
-
-function makeCode() {
-  return `DPEA-${new Date().getFullYear()}-${crypto.randomBytes(5).toString('hex').toUpperCase()}`;
-}
-
-function clean(value, max = 250) {
-  return String(value ?? '').trim().slice(0, max);
-}
-
-function normalizeRow(row) {
-  const keys = Object.fromEntries(Object.entries(row).map(([k, v]) => [k.trim().toLowerCase(), v]));
-  return {
-    code: clean(keys.codigo || keys.código || keys.code || makeCode(), 60).toUpperCase(),
-    full_name: clean(keys.nombre || keys.participante || keys.full_name),
-    document_id: clean(keys.ci || keys.documento || keys.document_id, 80),
-    event_name: clean(keys.evento || keys.curso || keys.event_name),
-    hours: clean(keys.horas || keys['carga horaria'] || keys.hours, 80),
-    issue_date: clean(keys.fecha || keys['fecha emisión'] || keys.issue_date || new Date().toISOString().slice(0, 10), 30)
-  };
-}
-
-async function generatePdf(cert) {
-  const pdf = await PDFDocument.create();
-  const page = pdf.addPage([842, 595]);
-  const regular = await pdf.embedFont(StandardFonts.Helvetica);
-  const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
-  const blue = rgb(0, 79 / 255, 159 / 255);
-  const red = rgb(227 / 255, 6 / 255, 19 / 255);
-  const logoPath = path.join(ROOT, 'public', 'logo-dpea.png');
-  if (fs.existsSync(logoPath)) {
-    const logo = await pdf.embedPng(fs.readFileSync(logoPath));
-    page.drawImage(logo, { x: 48, y: 485, width: 110, height: 48 });
-  }
-  page.drawRectangle({ x: 18, y: 18, width: 806, height: 559, borderColor: blue, borderWidth: 5 });
-  page.drawRectangle({ x: 29, y: 29, width: 784, height: 537, borderColor: red, borderWidth: 1 });
-  const center = (text, y, size, font = regular, color = rgb(0.1, 0.1, 0.1)) => {
-    let fitted = size;
-    while (font.widthOfTextAtSize(text, fitted) > 720 && fitted > 10) fitted -= 0.5;
-    const width = font.widthOfTextAtSize(text, fitted);
-    page.drawText(text, { x: (842 - width) / 2, y, size: fitted, font, color });
-  };
-  center('UNIVERSIDAD MAYOR, REAL Y PONTIFICIA DE SAN FRANCISCO XAVIER', 525, 13, bold, blue);
-  center('DIVISIÓN DE PLANIFICACIÓN Y EVALUACIÓN ACADÉMICA', 498, 15, bold, blue);
-  center('CERTIFICADO', 425, 34, bold, red);
-  center('Se otorga el presente certificado a:', 376, 16);
-  center(cert.full_name.toUpperCase(), 330, 25, bold, blue);
-  center(`Por su participación en: ${cert.event_name}`, 280, 15);
-  if (cert.hours) center(`Carga horaria: ${cert.hours}`, 248, 13);
-  center(`Fecha de emisión: ${cert.issue_date}`, 214, 12);
-  center(`Código: ${cert.code}`, 68, 10, bold);
-
-  const verifyUrl = `${process.env.BASE_URL || 'http://localhost:3000'}/verificar/${encodeURIComponent(cert.code)}`;
-  const qrData = await QRCode.toDataURL(verifyUrl, { width: 360, margin: 1, errorCorrectionLevel: 'H' });
-  const qr = await pdf.embedPng(Buffer.from(qrData.split(',')[1], 'base64'));
-  page.drawImage(qr, { x: 685, y: 48, width: 105, height: 105 });
-  page.drawText('Escanee para validar', { x: 689, y: 36, size: 8, font: regular, color: blue });
-  return Buffer.from(await pdf.save());
-}
-
-async function createPdfFor(cert) {
-  const safeCode = cert.code.replace(/[^A-Z0-9_-]/gi, '_');
-  const filename = `${safeCode}.pdf`;
-  fs.writeFileSync(path.join(CERT_DIR, filename), await generatePdf(cert));
-  db.prepare('UPDATE certificates SET pdf_filename=?, updated_at=CURRENT_TIMESTAMP WHERE id=?').run(filename, cert.id);
-  return filename;
-}
-
-app.get('/', (_req, res) => res.render('home'));
-app.get('/buscar', (req, res) => {
-  const code = clean(req.query.codigo, 60);
-  if (!code) return res.redirect('/');
-  res.redirect(`/verificar/${encodeURIComponent(code)}`);
-});
-
-app.get('/verificar/:code', (req, res) => {
-  const cert = db.prepare('SELECT * FROM certificates WHERE UPPER(code)=UPPER(?)').get(clean(req.params.code, 60));
-  res.status(cert ? 200 : 404).render('verify', { cert });
-});
-
-app.get('/admin/login', (_req, res) => res.render('login', { error: null }));
-app.post('/admin/login', async (req, res) => {
-  const expectedUser = process.env.ADMIN_USER || 'admin';
-  const configured = process.env.ADMIN_PASSWORD || 'Cambiar123!';
-  const ok = clean(req.body.username, 100) === expectedUser && await bcrypt.compare(clean(req.body.password, 200), await bcrypt.hash(configured, 10));
-  if (!ok) return res.status(401).render('login', { error: 'Usuario o contraseña incorrectos.' });
-  req.session.user = expectedUser;
-  res.redirect('/admin');
-});
-app.post('/admin/logout', requireAuth, (req, res) => req.session.destroy(() => res.redirect('/')));
-
-app.get('/admin', requireAuth, (req, res) => {
-  const q = clean(req.query.q);
-  const certs = q
-    ? db.prepare('SELECT * FROM certificates WHERE code LIKE ? OR full_name LIKE ? OR event_name LIKE ? ORDER BY id DESC LIMIT 500').all(...Array(3).fill(`%${q}%`))
-    : db.prepare('SELECT * FROM certificates ORDER BY id DESC LIMIT 500').all();
-  const stats = db.prepare("SELECT COUNT(*) total, SUM(status='VALIDO') validos, SUM(status='ANULADO') anulados FROM certificates").get();
-  res.render('admin', { certs, q, stats });
-});
-
-app.get('/admin/nuevo', requireAuth, (_req, res) => res.render('form', { cert: null, error: null }));
-app.post('/admin/nuevo', requireAuth, async (req, res) => {
-  const cert = normalizeRow(req.body);
-  if (!cert.full_name || !cert.event_name) return res.status(400).render('form', { cert, error: 'Nombre y evento son obligatorios.' });
-  try {
-    const info = db.prepare('INSERT INTO certificates(code,full_name,document_id,event_name,hours,issue_date) VALUES(?,?,?,?,?,?)')
-      .run(cert.code, cert.full_name, cert.document_id, cert.event_name, cert.hours, cert.issue_date);
-    const saved = db.prepare('SELECT * FROM certificates WHERE id=?').get(info.lastInsertRowid);
-    await createPdfFor(saved);
-    req.session.message = `Certificado ${saved.code} creado correctamente.`;
-    res.redirect('/admin');
-  } catch (error) {
-    res.status(400).render('form', { cert, error: error.code === 'SQLITE_CONSTRAINT_UNIQUE' ? 'El código ya existe.' : error.message });
-  }
-});
-
-app.get('/admin/:id/editar', requireAuth, (req, res) => {
-  const cert = db.prepare('SELECT * FROM certificates WHERE id=?').get(req.params.id);
-  if (!cert) return res.sendStatus(404);
-  res.render('form', { cert, error: null });
-});
-app.post('/admin/:id/editar', requireAuth, async (req, res) => {
-  const cert = normalizeRow(req.body);
-  cert.status = req.body.status === 'ANULADO' ? 'ANULADO' : 'VALIDO';
-  try {
-    db.prepare('UPDATE certificates SET code=?,full_name=?,document_id=?,event_name=?,hours=?,issue_date=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?')
-      .run(cert.code, cert.full_name, cert.document_id, cert.event_name, cert.hours, cert.issue_date, cert.status, req.params.id);
-    await createPdfFor(db.prepare('SELECT * FROM certificates WHERE id=?').get(req.params.id));
-    req.session.message = 'Certificado actualizado y PDF regenerado.';
-    res.redirect('/admin');
-  } catch (error) { res.status(400).render('form', { cert: { ...cert, id: req.params.id }, error: error.message }); }
-});
-
-app.post('/admin/:id/estado', requireAuth, (req, res) => {
-  const status = req.body.status === 'ANULADO' ? 'ANULADO' : 'VALIDO';
-  db.prepare('UPDATE certificates SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(status, req.params.id);
-  req.session.message = `Estado cambiado a ${status}.`;
-  res.redirect('/admin');
-});
-
-app.get('/admin/importar', requireAuth, (_req, res) => res.render('import', { result: null, error: null }));
-app.post('/admin/importar', requireAuth, upload.single('archivo'), async (req, res) => {
-  if (!req.file) return res.status(400).render('import', { result: null, error: 'Seleccione un archivo CSV.' });
-  let rows;
-  try { rows = parse(fs.readFileSync(req.file.path), { columns: true, skip_empty_lines: true, trim: true, bom: true }); }
-  catch (error) { fs.unlinkSync(req.file.path); return res.status(400).render('import', { result: null, error: `CSV inválido: ${error.message}` }); }
-  fs.unlinkSync(req.file.path);
-  let created = 0, skipped = 0;
-  for (const row of rows) {
-    const cert = normalizeRow(row);
-    if (!cert.full_name || !cert.event_name) { skipped++; continue; }
-    try {
-      const info = db.prepare('INSERT INTO certificates(code,full_name,document_id,event_name,hours,issue_date) VALUES(?,?,?,?,?,?)')
-        .run(cert.code, cert.full_name, cert.document_id, cert.event_name, cert.hours, cert.issue_date);
-      await createPdfFor(db.prepare('SELECT * FROM certificates WHERE id=?').get(info.lastInsertRowid));
-      created++;
-    } catch (_error) { skipped++; }
-  }
-  res.render('import', { result: { total: rows.length, created, skipped }, error: null });
-});
-
-app.get('/admin/plantilla.csv', requireAuth, (_req, res) => {
-  res.type('text/csv').attachment('plantilla-certificados.csv').send('\uFEFFcodigo,nombre,ci,evento,horas,fecha\n,Nombre completo,1234567,Nombre del evento,40,2026-09-03\n');
-});
-
-app.use((_req, res) => res.status(404).render('404'));
-app.use((error, _req, res, _next) => { console.error(error); res.status(500).send('Ocurrió un error interno.'); });
-
-const port = Number(process.env.PORT || 3000);
-app.listen(port, () => console.log(`Sistema DPEA disponible en http://localhost:${port}`));
+const path=require('path'),fs=require('fs'),crypto=require('crypto');
+const express=require('express'),cookieSession=require('cookie-session'),helmet=require('helmet'),multer=require('multer');
+const QRCode=require('qrcode'),{parse}=require('csv-parse/sync'),{PDFDocument,StandardFonts,rgb}=require('pdf-lib');
+const {createClient}=require('@supabase/supabase-js'),{google}=require('googleapis'),{Readable}=require('stream');
+const app=express(),ROOT=__dirname,TMP=path.join(ROOT,'storage','imports'); fs.mkdirSync(TMP,{recursive:true});
+const upload=multer({dest:TMP,limits:{fileSize:5e6},fileFilter:(_r,f,cb)=>cb(null,/\.csv$/i.test(f.originalname))});
+const env=n=>{if(!process.env[n])throw new Error(`Falta la variable ${n}`);return process.env[n]};
+const db=()=>createClient(env('SUPABASE_URL'),env('SUPABASE_SERVICE_ROLE_KEY'),{auth:{persistSession:false}});
+const gd=()=>google.drive({version:'v3',auth:new google.auth.JWT({email:env('GOOGLE_SERVICE_ACCOUNT_EMAIL'),key:env('GOOGLE_PRIVATE_KEY').replace(/\\n/g,'\n'),scopes:['https://www.googleapis.com/auth/drive']})});
+const clean=(v,n=500)=>String(v??'').trim().slice(0,n),code=()=>`DPEA-${new Date().getFullYear()}-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
+app.set('view engine','ejs');app.set('views',path.join(ROOT,'views'));app.set('trust proxy',1);
+app.use(helmet({contentSecurityPolicy:false}),express.urlencoded({extended:false}),express.json(),express.static(path.join(ROOT,'public')));
+app.use(cookieSession({name:'dpea_session',keys:[process.env.SESSION_SECRET||'cambiar'],httpOnly:true,sameSite:'lax',secure:process.env.NODE_ENV==='production',maxAge:28800000}));
+app.use((req,res,next)=>{res.locals.institution=process.env.INSTITUTION_NAME||'División de Planificación y Evaluación Académica';res.locals.officialUrl=process.env.OFFICIAL_URL||'https://planificacionacademica.usfx.bo/';res.locals.baseUrl=(process.env.BASE_URL||`${req.protocol}://${req.get('host')}`).replace(/\/$/,'');res.locals.user=req.session?.user||null;res.locals.message=req.session?.message||null;if(req.session)delete req.session.message;next()});
+const auth=(req,res,next)=>req.session?.user?next():res.redirect('/admin/login');
+async function courses(){const{data,error}=await db().from('courses').select('*').order('title');if(error)throw error;return data||[]}
+async function course(title,description=''){title=clean(title,250);description=clean(description,2500);if(!title)throw Error('El curso es obligatorio');const c=db();let{data,error}=await c.from('courses').select('*').ilike('title',title).maybeSingle();if(error)throw error;if(data){if(description&&description!==data.description){({data,error}=await c.from('courses').update({description}).eq('id',data.id).select().single());if(error)throw error}return data}({data,error}=await c.from('courses').insert({title,description}).select().single());if(error)throw error;return data}
+async function folder(c){if(c.drive_folder_id)return c.drive_folder_id;const api=gd(),root=env('GOOGLE_DRIVE_ROOT_FOLDER_ID'),name=clean(c.title,100).replace(/[\\/:*?"<>|]/g,'-'),q=name.replace(/'/g,"\\'");const found=await api.files.list({q:`'${root}' in parents and name='${q}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,fields:'files(id)',supportsAllDrives:true,includeItemsFromAllDrives:true});let id=found.data.files?.[0]?.id;if(!id)id=(await api.files.create({requestBody:{name,mimeType:'application/vnd.google-apps.folder',parents:[root]},fields:'id',supportsAllDrives:true})).data.id;const{error}=await db().from('courses').update({drive_folder_id:id}).eq('id',c.id);if(error)throw error;return id}
+function wrap(text,font,size,width){const out=[];let line='';for(const w of String(text||'').split(/\s+/)){const t=line?`${line} ${w}`:w;if(font.widthOfTextAtSize(t,size)<=width)line=t;else{if(line)out.push(line);line=w}}if(line)out.push(line);return out}
+async function pdf(cert,c,url){const d=await PDFDocument.create(),p=d.addPage([842,595]),r=await d.embedFont(StandardFonts.Helvetica),b=await d.embedFont(StandardFonts.HelveticaBold),display=await d.embedFont(StandardFonts.TimesRomanBoldItalic),blue=rgb(0,79/255,159/255),red=rgb(227/255,6/255,19/255);p.drawRectangle({x:18,y:18,width:806,height:559,borderColor:blue,borderWidth:5});p.drawRectangle({x:29,y:29,width:784,height:537,borderColor:red,borderWidth:1});const center=(t,y,s,f=r,col=rgb(.1,.1,.1),mw=700)=>{while(f.widthOfTextAtSize(t,s)>mw&&s>10)s-=.5;p.drawText(t,{x:(842-f.widthOfTextAtSize(t,s))/2,y,size:s,font:f,color:col})};const logo=path.join(ROOT,'public','logo-dpea.png');if(fs.existsSync(logo))p.drawImage(await d.embedPng(fs.readFileSync(logo)),{x:48,y:482,width:112,height:49});center('UNIVERSIDAD MAYOR, REAL Y PONTIFICIA DE SAN FRANCISCO XAVIER',525,13,b,blue,580);center('DIVISIÓN DE PLANIFICACIÓN Y EVALUACIÓN ACADÉMICA',498,15,b,blue,570);center('CERTIFICADO',421,34,b,red);center('Se otorga el presente certificado a:',376,16);center(cert.full_name.toUpperCase(),326,29,display,blue,650);center(`Por su participación en: ${c.title}`,276,16,b);const lines=wrap(c.description,r,12,620).slice(0,4);lines.forEach((x,i)=>center(x,238-i*17,12,r,rgb(.25,.28,.34),620));const y=Math.max(134,210-lines.length*17);if(cert.hours)center(`Carga horaria: ${cert.hours}`,y,12);center(`Fecha de emisión: ${cert.issue_date}`,y-25,12);const q=await d.embedPng(Buffer.from((await QRCode.toDataURL(url,{width:500,margin:1,errorCorrectionLevel:'H'})).split(',')[1],'base64'));p.drawImage(q,{x:689,y:425,width:105,height:105});return Buffer.from(await d.save())}
+async function store(cert,c,base){const api=gd(),buf=await pdf(cert,c,`${base}/verificar/${encodeURIComponent(cert.code)}`),name=`${cert.full_name} - ${c.title}.pdf`.replace(/[\\/:*?"<>|]/g,'-');let id=cert.drive_file_id;if(id)await api.files.update({fileId:id,media:{mimeType:'application/pdf',body:Readable.from(buf)},requestBody:{name},supportsAllDrives:true});else id=(await api.files.create({requestBody:{name,parents:[await folder(c)]},media:{mimeType:'application/pdf',body:Readable.from(buf)},fields:'id',supportsAllDrives:true})).data.id;const{error}=await db().from('certificates').update({drive_file_id:id}).eq('id',cert.id);if(error)throw error}
+const row=o=>{const k=Object.fromEntries(Object.entries(o).map(([a,v])=>[a.trim().toLowerCase(),v]));return{code:clean(k.codigo||k.code||code(),80).toUpperCase(),full_name:clean(k.nombre||k.participante,250),document_id:clean(k.ci||k.documento,80),course_title:clean(k.curso||k.evento,250),course_description:clean(k.descripcion||k.description,2500),hours:clean(k.horas||k['carga horaria'],80),issue_date:clean(k.fecha||new Date().toISOString().slice(0,10),30)}};
+app.get('/',(_q,s)=>s.render('home'));app.get('/salud',(_q,s)=>s.json({ok:true}));app.get('/buscar',(q,s)=>s.redirect(q.query.codigo?`/verificar/${encodeURIComponent(clean(q.query.codigo,80))}`:'/'));
+app.get('/verificar/:code',async(q,s,n)=>{try{const{data,error}=await db().from('certificates').select('*,courses(*)').ilike('code',clean(q.params.code,80)).maybeSingle();if(error)throw error;s.status(data?200:404).render('verify',{cert:data})}catch(e){n(e)}});
+app.get('/certificados/:code/pdf',async(q,s,n)=>{try{const{data:c,error}=await db().from('certificates').select('drive_file_id,code,status').ilike('code',clean(q.params.code,80)).maybeSingle();if(error)throw error;if(!c||c.status!=='VALIDO'||!c.drive_file_id)return s.sendStatus(404);const x=await gd().files.get({fileId:c.drive_file_id,alt:'media',supportsAllDrives:true},{responseType:'stream'});s.set({'Content-Type':'application/pdf','Content-Disposition':`inline; filename="${c.code}.pdf"`});x.data.pipe(s)}catch(e){n(e)}});
+app.get('/admin/login',(_q,s)=>s.render('login',{error:null}));app.post('/admin/login',(q,s)=>{if(clean(q.body.username,100)!==env('ADMIN_USER')||clean(q.body.password,300)!==env('ADMIN_PASSWORD'))return s.status(401).render('login',{error:'Usuario o contraseña incorrectos.'});q.session.user=q.body.username;s.redirect('/admin')});app.post('/admin/logout',auth,(q,s)=>{q.session=null;s.redirect('/')});
+app.get('/admin',auth,async(q,s,n)=>{try{let query=db().from('certificates').select('*,courses(title)').order('created_at',{ascending:false}).limit(500),search=clean(q.query.q,200);if(search)query=query.or(`code.ilike.%${search}%,full_name.ilike.%${search}%`);const[{data,error},{count:total},{count:validos},{count:anulados}]=await Promise.all([query,db().from('certificates').select('*',{count:'exact',head:true}),db().from('certificates').select('*',{count:'exact',head:true}).eq('status','VALIDO'),db().from('certificates').select('*',{count:'exact',head:true}).eq('status','ANULADO')]);if(error)throw error;s.render('admin',{certs:data||[],q:search,stats:{total,validos,anulados}})}catch(e){n(e)}});
+app.get('/admin/nuevo',auth,async(_q,s,n)=>{try{s.render('form',{cert:null,courses:await courses(),error:null})}catch(e){n(e)}});
+app.post('/admin/nuevo',auth,async(q,s,n)=>{const x=row(q.body);try{if(!x.full_name||!x.course_title)throw Error('Nombre y curso son obligatorios');const c=await course(x.course_title,x.course_description),{data:cert,error}=await db().from('certificates').insert({code:x.code,full_name:x.full_name,document_id:x.document_id,course_id:c.id,hours:x.hours,issue_date:x.issue_date}).select().single();if(error)throw error;await store(cert,c,s.locals.baseUrl);q.session.message=`Certificado ${cert.code} creado y guardado en Drive.`;s.redirect('/admin')}catch(e){try{s.status(400).render('form',{cert:x,courses:await courses(),error:e.message})}catch(z){n(z)}}});
+app.get('/admin/:id/editar',auth,async(q,s,n)=>{try{const{data,error}=await db().from('certificates').select('*,courses(*)').eq('id',q.params.id).maybeSingle();if(error)throw error;if(!data)return s.sendStatus(404);s.render('form',{cert:data,courses:await courses(),error:null})}catch(e){n(e)}});
+app.post('/admin/:id/editar',auth,async(q,s,n)=>{try{const x=row(q.body),c=await course(x.course_title,x.course_description),{data:old}=await db().from('certificates').select('*').eq('id',q.params.id).single(),{data:cert,error}=await db().from('certificates').update({code:x.code,full_name:x.full_name,document_id:x.document_id,course_id:c.id,hours:x.hours,issue_date:x.issue_date,status:q.body.status==='ANULADO'?'ANULADO':'VALIDO'}).eq('id',q.params.id).select().single();if(error)throw error;cert.drive_file_id=old?.drive_file_id;await store(cert,c,s.locals.baseUrl);q.session.message='Certificado actualizado en Drive.';s.redirect('/admin')}catch(e){n(e)}});
+app.post('/admin/:id/estado',auth,async(q,s,n)=>{try{const status=q.body.status==='ANULADO'?'ANULADO':'VALIDO',{error}=await db().from('certificates').update({status}).eq('id',q.params.id);if(error)throw error;q.session.message=`Estado cambiado a ${status}.`;s.redirect('/admin')}catch(e){n(e)}});
+app.get('/admin/importar',auth,(_q,s)=>s.render('import',{result:null,error:null}));app.post('/admin/importar',auth,upload.single('archivo'),async(q,s,n)=>{if(!q.file)return s.status(400).render('import',{result:null,error:'Seleccione un CSV.'});try{const rows=parse(fs.readFileSync(q.file.path),{columns:true,skip_empty_lines:true,trim:true,bom:true});fs.unlinkSync(q.file.path);let created=0,skipped=0;for(const a of rows){try{const x=row(a);if(!x.full_name||!x.course_title)throw Error();const c=await course(x.course_title,x.course_description),{data:cert,error}=await db().from('certificates').insert({code:x.code,full_name:x.full_name,document_id:x.document_id,course_id:c.id,hours:x.hours,issue_date:x.issue_date}).select().single();if(error)throw error;await store(cert,c,s.locals.baseUrl);created++}catch(_e){skipped++}}s.render('import',{result:{total:rows.length,created,skipped},error:null})}catch(e){if(fs.existsSync(q.file.path))fs.unlinkSync(q.file.path);n(e)}});
+app.get('/admin/plantilla.csv',auth,(_q,s)=>s.type('text/csv').attachment('plantilla-certificados.csv').send('\uFEFFcodigo,nombre,ci,curso,descripcion,horas,fecha\n,Nombre completo,1234567,Nombre del curso,Descripción común,40 horas académicas,2026-09-03\n'));
+app.use((_q,s)=>s.status(404).render('404'));app.use((e,_q,s,_n)=>{console.error(e);s.status(500).send(process.env.NODE_ENV==='production'?'Ocurrió un error interno.':e.message)});
+if(require.main===module)app.listen(Number(process.env.PORT||3000),()=>console.log(`Sistema DPEA disponible en http://localhost:${process.env.PORT||3000}`));module.exports=app;module.exports.generateCertificatePdf=pdf;

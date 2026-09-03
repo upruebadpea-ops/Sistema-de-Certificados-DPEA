@@ -1,54 +1,52 @@
 # Sistema de Certificados DPEA
 
-Aplicación web independiente para registrar, generar y validar certificados de la División de Planificación y Evaluación Académica.
+Aplicación Express preparada para Vercel, con Supabase como base de datos y Google Drive para almacenar los PDF.
 
 ## Funciones
 
-- Panel administrativo protegido por usuario y contraseña.
-- Alta y edición manual.
-- Importación masiva desde CSV preparado en Excel.
-- Base de datos SQLite.
-- Código único por certificado.
-- PDF institucional generado automáticamente.
-- QR dentro del PDF que abre la validación pública.
-- Consulta pública por código.
-- Anulación y reactivación sin eliminar el historial.
-- CI parcialmente oculto en la página pública.
-- Enlace permanente al sitio oficial de la DPEA.
+- Registro y edición manual de certificados.
+- Curso seleccionable o escribible; los cursos nuevos quedan disponibles después.
+- Descripción común reutilizable por curso.
+- Importación masiva CSV desde Excel.
+- PDF institucional limpio, con QR arriba a la derecha y nombre destacado.
+- Una subcarpeta de Google Drive por curso.
+- Verificación pública, anulación y descarga mediante código.
 
-## Instalación local
+## Supabase
 
-```bash
+1. Cree un proyecto y abra **SQL Editor**.
+2. Ejecute `supabase/schema.sql` completo.
+3. En **Project Settings > API**, copie la URL y `service_role`.
+4. Nunca publique `service_role` ni la incluya en Git.
+
+## Google Drive
+
+1. Cree un proyecto de Google Cloud y active **Google Drive API**.
+2. Cree una cuenta de servicio y una clave JSON.
+3. Comparta la carpeta `CERTIFICADOS` con el correo de la cuenta de servicio como editor.
+4. Quite el permiso público de edición de la carpeta.
+
+La carpeta raíz configurada es `1Nph-pc6xfbXL59laggthFDNWfiw1X1aO`. El sistema crea dentro una carpeta por curso.
+
+## Variables
+
+Copie `.env.example` como `.env` y complete `BASE_URL`, `SESSION_SECRET`, `ADMIN_USER`, `ADMIN_PASSWORD`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `GOOGLE_SERVICE_ACCOUNT_EMAIL` y `GOOGLE_PRIVATE_KEY`.
+
+## Desarrollo
+
+```powershell
 npm install
-copy .env.example .env
+Copy-Item .env.example .env
 npm start
 ```
 
-Abra `http://localhost:3000`. El usuario inicial del ejemplo es `admin` y la contraseña es `Cambiar123!`; deben cambiarse antes de publicar.
+## Vercel
 
-## Configuración
+1. Importe el repositorio en Vercel.
+2. No configure Build Command ni Output Directory.
+3. Copie las variables de `.env.example` en **Settings > Environment Variables**.
+4. Use la URL final de Vercel como `BASE_URL` y vuelva a desplegar antes de emitir certificados.
 
-Edite `.env`:
+## CSV
 
-- `BASE_URL`: dirección pública final, por ejemplo `https://certificados.planificacionacademica.usfx.bo`.
-- `SESSION_SECRET`: texto aleatorio largo.
-- `ADMIN_USER` y `ADMIN_PASSWORD`: credenciales administrativas.
-- `OFFICIAL_URL`: página institucional.
-
-La base se crea automáticamente en `data/certificados.db`. Los PDF quedan en `storage/certificates`.
-
-## Importación
-
-El panel permite descargar una plantilla CSV. Las columnas son:
-
-```text
-codigo,nombre,ci,evento,horas,fecha
-```
-
-El código puede quedar vacío. Cada fila válida crea el registro y genera su PDF con QR.
-
-## Producción
-
-Se recomienda desplegar detrás de HTTPS con Nginx o una plataforma compatible como Render/Railway, montar `data/` y `storage/` en un volumen persistente y programar copias de seguridad. Para que el QR use el dominio institucional se debe configurar `BASE_URL` antes de emitir los PDF.
-
-Google Drive puede añadirse como almacenamiento remoto en una segunda etapa; la versión actual mantiene archivos y base en el servidor para funcionar sin depender de cuentas personales.
+Columnas: `codigo,nombre,ci,curso,descripcion,horas,fecha`. Si el código queda vacío, se genera automáticamente.
