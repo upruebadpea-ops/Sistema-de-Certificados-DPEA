@@ -1,0 +1,30 @@
+<!--
+  Pegue este bloque en un módulo Código de Divi, dentro de la página
+  https://planificacionacademica.usfx.bo/verificar-certificado/
+
+  Reemplace PEGUE_AQUI_LA_URL_EXEC por la URL /exec de la implementación
+  de Apps Script. No use la URL /dev.
+-->
+<div id="dpea-verificador" style="width:100%; min-height:640px"></div>
+<script>
+  (function () {
+    const WEB_APP = 'PEGUE_AQUI_LA_URL_EXEC';
+    const target = document.getElementById('dpea-verificador');
+    const code = new URLSearchParams(window.location.search).get('codigo') || '';
+
+    if (WEB_APP.indexOf('PEGUE_AQUI') !== -1) {
+      target.innerHTML = '<p>Falta configurar la URL del verificador.</p>';
+      return;
+    }
+
+    const frame = document.createElement('iframe');
+    frame.title = 'Verificar certificado DPEA';
+    frame.width = '100%';
+    frame.height = '640';
+    frame.style.border = '0';
+    frame.style.background = '#f7f8fb';
+    frame.src = WEB_APP + (WEB_APP.indexOf('?') === -1 ? '?' : '&') +
+      'embed=1&codigo=' + encodeURIComponent(code);
+    target.appendChild(frame);
+  }());
+</script>

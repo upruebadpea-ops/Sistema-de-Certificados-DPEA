@@ -1,0 +1,22 @@
+<!-- Pegue este bloque en el módulo Código/HTML de la página WordPress /verificar-certificado/. -->
+<div id="dpea-verificador" style="max-width:900px;margin:24px auto"></div>
+<script>
+(() => {
+  // Reemplace por la URL final de Vercel del sistema, sin barra final.
+  const SISTEMA_CERTIFICADOS = 'https://TU-PROYECTO.vercel.app';
+  const code = new URLSearchParams(window.location.search).get('codigo');
+  const container = document.getElementById('dpea-verificador');
+
+  if (!code) {
+    container.innerHTML = '<p style="padding:20px;text-align:center">Escanee el código QR del certificado o ingrese el código de verificación.</p>';
+    return;
+  }
+
+  const frame = document.createElement('iframe');
+  frame.src = `${SISTEMA_CERTIFICADOS}/verificar/${encodeURIComponent(code)}`;
+  frame.title = 'Verificación oficial de certificado DPEA';
+  frame.loading = 'lazy';
+  frame.style.cssText = 'width:100%;min-height:760px;border:0;background:#f4f7fb';
+  container.replaceChildren(frame);
+})();
+</script>

@@ -14,4 +14,15 @@ CREATE INDEX IF NOT EXISTS certificates_code_idx ON public.certificates(code);
 CREATE INDEX IF NOT EXISTS certificates_name_idx ON public.certificates(full_name);
 ALTER TABLE public.courses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.certificates ENABLE ROW LEVEL SECURITY;
+CREATE TABLE IF NOT EXISTS public.integration_settings (
+ key text PRIMARY KEY,
+ value text NOT NULL,
+ updated_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE public.integration_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.courses ADD COLUMN IF NOT EXISTS template_file_id text;
+ALTER TABLE public.courses ADD COLUMN IF NOT EXISTS template_name text;
+ALTER TABLE public.courses ADD COLUMN IF NOT EXISTS end_date date;
+ALTER TABLE public.courses ADD COLUMN IF NOT EXISTS spreadsheet_tab_name text;
+ALTER TABLE public.courses ADD COLUMN IF NOT EXISTS signatures jsonb NOT NULL DEFAULT '[]'::jsonb;
 -- El servidor usa SUPABASE_SERVICE_ROLE_KEY. Nunca publique esa clave en GitHub.
