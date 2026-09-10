@@ -1,0 +1,7 @@
+<%- include('partials/header',{title:'Reporte de curso'}) %>
+<main class="shell page">
+  <div class="page-head"><div><h1>Reporte del curso</h1><div class="help"><%= course.title %></div></div><div><a class="btn btn-light" href="/admin/cursos/<%= course.id %>/reporte.csv">Descargar CSV</a> <a href="/admin">← Volver</a></div></div>
+  <section class="grid"><div class="card stat"><span>Emitidos</span><strong><%= total %></strong></div><div class="card stat"><span>Válidos</span><strong><%= validos %></strong></div><div class="card stat"><span>Anulados</span><strong><%= anulados %></strong></div></section>
+  <section class="card"><h2>Detalle de certificados</h2><div class="table-wrap"><table><thead><tr><th>Código</th><th>Participante</th><th>C.I.</th><th>Fecha</th><th>Estado</th><th>PDF</th></tr></thead><tbody><% certs.forEach(c=>{ %><tr><td><%= c.code %></td><td><%= c.full_name %></td><td><%= c.document_id||'—' %></td><td><%= c.issue_date %></td><td><%= c.status %></td><td><% if(c.drive_file_id){ %><a target="_blank" href="/certificados/<%= encodeURIComponent(c.code) %>/pdf">Abrir</a><% }else{ %>—<% } %></td></tr><% }) %><% if(!certs.length){ %><tr><td colspan="6">Aún no hay certificados para este curso.</td></tr><% } %></tbody></table></div></section>
+</main>
+<%- include('partials/footer') %>

@@ -1,0 +1,6 @@
+<%- include('partials/header',{title:'Registro de actividad'}) %>
+<main class="shell page">
+  <div class="page-head"><div><h1>Registro de actividad</h1><div class="help">Últimas acciones realizadas en el sistema.</div></div><a href="/admin">← Volver</a></div>
+  <section class="card"><div class="table-wrap"><table><thead><tr><th>Fecha y hora</th><th>Usuario</th><th>Acción</th><th>Detalle</th></tr></thead><tbody><% entries.forEach(item=>{ %><tr><td><%= new Date(item.created_at).toLocaleString('es-BO') %></td><td><%= item.actor %></td><td><%= item.action %></td><td><%= item.details?.code||item.details?.name||item.details?.course||'—' %></td></tr><% }) %><% if(!entries.length){ %><tr><td colspan="4">Aún no hay actividades registradas.</td></tr><% } %></tbody></table></div></section>
+</main>
+<%- include('partials/footer') %>

@@ -20,6 +20,15 @@ CREATE TABLE IF NOT EXISTS public.integration_settings (
  updated_at timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE public.integration_settings ENABLE ROW LEVEL SECURITY;
+CREATE TABLE IF NOT EXISTS public.activity_log (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ actor text NOT NULL DEFAULT 'administrador',
+ action text NOT NULL,
+ details jsonb NOT NULL DEFAULT '{}'::jsonb,
+ created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS activity_log_created_at_idx ON public.activity_log(created_at DESC);
+ALTER TABLE public.activity_log ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.courses ADD COLUMN IF NOT EXISTS template_file_id text;
 ALTER TABLE public.courses ADD COLUMN IF NOT EXISTS template_name text;
 ALTER TABLE public.courses ADD COLUMN IF NOT EXISTS end_date date;
